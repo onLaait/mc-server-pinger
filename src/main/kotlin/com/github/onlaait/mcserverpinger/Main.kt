@@ -5,8 +5,7 @@ import br.com.azalim.mcserverping.MCPingOptions
 import com.github.ajalt.mordant.rendering.AnsiLevel
 import com.github.ajalt.mordant.rendering.TextColors
 import com.github.ajalt.mordant.terminal.Terminal
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
+import com.github.onlaait.mcserverpinger.Log.logError
 import java.io.IOException
 import java.net.IDN
 import java.net.UnknownHostException
@@ -17,19 +16,15 @@ import kotlin.concurrent.withLock
 import kotlin.io.path.*
 import kotlin.math.min
 
-val logger: Logger = LoggerFactory.getLogger("a")
-val filePath = Path("servers.txt")
-val pingers = mutableListOf<Thread>()
-val terminal = Terminal(AnsiLevel.TRUECOLOR)
 val print = sortedMapOf<Int, String>()
-var onlineChanged = false
 var changed = true
-val usernameRegex = Regex("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*\$")
-const val weirdSpigotNum = 12 // 일부 Spigot 서버에서 인원이 최대 12명만 표시되는 현상
 val lock = ReentrantLock()
 
 fun main() {
     Thread.setDefaultUncaughtExceptionHandler(DefaultExceptionHandler)
+    val filePath = Path("servers.txt")
+    val pingers = mutableListOf<Thread>()
+    val terminal = Terminal(AnsiLevel.TRUECOLOR)
     terminal.cursor.hide()
     if (!filePath.exists() || filePath.isDirectory()) filePath.createFile()
     thread(name = "Printer", isDaemon = true) {
@@ -69,7 +64,9 @@ fun main() {
     }
 }
 
+const val weirdSpigotNum = 12 // 일부 Spigot 서버에서 인원이 최대 12명만 표시되는 현상
 val whitespacesRegex = Regex("\\s+")
+val usernameRegex = Regex("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*\$")
 
 fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaemon = true) {
     try {
@@ -81,7 +78,6 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
             .port(port)
             .timeout(10000)
             .build()
-        var latestOnline = -1
         val playersCache = sortedMapOf<String, Double>()
         while (true) {
             run {
@@ -94,6 +90,9 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                     } else {
                         update(n, null)
                     }
+                    return@run
+                } catch (e: NullPointerException) {
+                    logError(e)
                     return@run
                 }
                 if (Thread.interrupted()) return@thread
@@ -121,8 +120,6 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                         str.append(diff)
                     }
                 }
-                if (latestOnline != online) onlineChanged = true
-                latestOnline = online
                 update(
                     n,
                     if (online >= 2) {
@@ -153,11 +150,10 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
             }
             Thread.sleep(2000)
         }
-    } catch (e: InterruptedException) {
-        return@thread
+    } catch (_: InterruptedException) {
     } catch (t: Throwable) {
         update(n, TextColors.brightRed("$address ${t.javaClass.name}"))
-        logger.error(t.stackTraceToString())
+        logError(t)
         return@thread
     }
 }
