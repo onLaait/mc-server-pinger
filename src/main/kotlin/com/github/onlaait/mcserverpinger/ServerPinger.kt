@@ -146,16 +146,19 @@ class ServerPinger() {
         val version: Version,
         val favicon: String?
     ) {
+
         data class Players(
             val max: Int?,
             val online: Int?,
             val sample: List<Player>
         ) {
+
             data class Player(
                 val id: String,
                 val name: String
             )
         }
+
         data class Version(
             val name: String?,
             val protocol: Int?

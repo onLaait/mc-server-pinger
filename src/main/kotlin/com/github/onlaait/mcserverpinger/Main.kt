@@ -30,7 +30,7 @@ fun main() {
             lock.withLock {
                 if (changed) {
                     val str = StringBuilder("\n")
-                    for (content in print.toSortedMap().values) {
+                    for ((_, content) in print.toSortedMap()) {
                         str.append(content.serialize())
                         str.append("\n")
                     }
@@ -66,7 +66,7 @@ fun main() {
     }
 }
 
-const val weirdSpigotNum = 12 // 일부 Spigot 서버에서 online이 최대 12명만 표시되는 현상
+const val weirdSpigotNum = 12 // 일부 Spigot 서버에서 online이 최대 12까지만 표시되는 현상
 val whitespacesPattern: Pattern = Pattern.compile("\\s+")
 val usernamePattern: Pattern = Pattern.compile("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*\$")
 
@@ -83,10 +83,10 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                     update(
                         n,
                         if (e is IOException) {
-                            if (e is UnknownHostException) Content(address = address, error = e) else null
+                            if (e is UnknownHostException) Content(address = address, error = e.javaClass) else null
                         } else {
                             logError(e)
-                            Content(address = address, error = e)
+                            Content(address = address, error = e.javaClass)
                         }
                     )
                     return@run
@@ -94,7 +94,7 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                 if (Thread.interrupted()) return@thread
 
                 val players = response.players
-                val online = players.online ?: 0
+                val online = players.online
                 val max = players.max
                 val sample = players.sample
                 val motd = response.description.let { des ->
@@ -107,16 +107,23 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                 val version = response.version.name
 
                 val isOnlineNumWeird = (online == weirdSpigotNum)
-                if (sample.isEmpty() || (!isOnlineNumWeird && (online <= 12 || playersCache.size > online))) {
+                if (sample.isEmpty() || (!isOnlineNumWeird && online != null && (online <= 12 || playersCache.size > online))) {
                     playersCache.clear()
                 }
                 sample.map { it.name }.filter { it.isNotBlank() && it != "Anonymous Player" }.forEach { name ->
                     playersCache[name] = 1.0
                 }
 
-                val diff = online - playersCache.size
-                val shouldAssumeOnline = (isOnlineNumWeird && diff < 0)
-                val displayedOnline = if (shouldAssumeOnline) online-diff else online
+                val shouldAssumeOnline: Boolean
+                val displayedOnline: Int?
+                if (online != null) {
+                    val diff = online - playersCache.size
+                    shouldAssumeOnline = (isOnlineNumWeird && diff < 0)
+                    displayedOnline = if (shouldAssumeOnline) online - diff else online
+                } else {
+                    shouldAssumeOnline = false
+                    displayedOnline = null
+                }
                 update(n, Content(
                     address = address,
                     players = Content.Players(
@@ -130,7 +137,7 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                 ))
 
                 val c = if (sample.isNotEmpty()) {
-                    sample.size.toDouble() / (if (online == weirdSpigotNum) (max ?: 20).coerceIn(weirdSpigotNum..30) else online) / 30
+                    sample.size.toDouble() / (if (online == weirdSpigotNum) (max ?: 20).coerceIn(weirdSpigotNum..30) else online ?: sample.size) / 30
                 } else {
                     0.0
                 }
@@ -147,7 +154,7 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
         }
     } catch (_: InterruptedException) {
     } catch (t: Throwable) {
-        update(n, Content(address = address, error = t))
+        update(n, Content(address = address, error = t.javaClass))
         logError(t)
         return@thread
     }
@@ -162,15 +169,16 @@ fun update(n: Int, content: Content?) {
     lock.withLock { changed = true }
 }
 
-class PingerException(message: String) : Exception(message)
+class PingerException(message: String) : RuntimeException(message)
 
 data class Content(
     val address: String,
     val players: Players = Players(),
     val version: String? = null,
     val motd: String? = null,
-    val error: Throwable? = null
+    val error: Class<Throwable>? = null
 ) {
+
     data class Players(
         val max: Int? = null,
         val online: Int? = null,
@@ -179,7 +187,7 @@ data class Content(
     )
 
     fun serialize(): String {
-        if (error != null) return TextColors.brightRed("$address ${error.javaClass.name}")
+        if (error != null) return TextColors.brightRed("$address ${error.name}")
         val str = StringBuilder("$address (")
         if (players.online != null && players.max != null) {
             str.append(players.online)
@@ -208,8 +216,9 @@ data class Content(
                 }
             }
         }
-        return if (players.online != null && players.online >= 2) {
-            if (players.online >= 25) {
+        val p = players.online ?: players.list.size
+        return if (p >= 2) {
+            if (p >= 25) {
                 TextColors.brightCyan
             } else {
                 TextColors.brightGreen
