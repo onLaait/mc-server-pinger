@@ -1,22 +1,20 @@
 package com.github.onlaait.mcserverpinger
 
-import br.com.azalim.mcserverping.MCPing
-import br.com.azalim.mcserverping.MCPingOptions
 import com.github.ajalt.mordant.rendering.AnsiLevel
 import com.github.ajalt.mordant.rendering.TextColors
 import com.github.ajalt.mordant.terminal.Terminal
 import com.github.onlaait.mcserverpinger.Log.logError
+import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
 import java.io.IOException
-import java.net.IDN
 import java.net.UnknownHostException
 import java.nio.file.attribute.FileTime
 import java.util.concurrent.locks.ReentrantLock
+import java.util.regex.Pattern
 import kotlin.concurrent.thread
 import kotlin.concurrent.withLock
 import kotlin.io.path.*
-import kotlin.math.min
 
-val print = sortedMapOf<Int, String>()
+val print = sortedMapOf<Int, Content>()
 var changed = true
 val lock = ReentrantLock()
 
@@ -31,9 +29,13 @@ fun main() {
         while (true) {
             lock.withLock {
                 if (changed) {
-                    val result = "\n" + print.map { it.value }.joinToString("\n") + "\n"
+                    val str = StringBuilder("\n")
+                    for (content in print.toSortedMap().values) {
+                        str.append(content.serialize())
+                        str.append("\n")
+                    }
                     TerminalUtil.clearTerminal()
-                    terminal.println(result)
+                    terminal.println(str.toString())
                     terminal.cursor.hide()
                     changed = false
                 }
@@ -64,83 +66,76 @@ fun main() {
     }
 }
 
-const val weirdSpigotNum = 12 // 일부 Spigot 서버에서 인원이 최대 12명만 표시되는 현상
-val whitespacesRegex = Regex("\\s+")
-val usernameRegex = Regex("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*\$")
+const val weirdSpigotNum = 12 // 일부 Spigot 서버에서 online이 최대 12명만 표시되는 현상
+val whitespacesPattern: Pattern = Pattern.compile("\\s+")
+val usernamePattern: Pattern = Pattern.compile("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*\$")
 
 fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaemon = true) {
     try {
-        if (address.contains(' ')) throw PingerException("Address contains blank")
-        val s = address.split(':')
-        val port = if (s.size == 2) (s[1].toIntOrNull() ?: throw PingerException("Port is not integer")) else 25565
-        val options = MCPingOptions.builder()
-            .hostname(IDN.toASCII(s[0]))
-            .port(port)
-            .timeout(10000)
-            .build()
+        val pinger = ServerPinger(ServerAddress.parse(address))
         val playersCache = sortedMapOf<String, Double>()
         while (true) {
             run {
                 val response = try {
-                    MCPing.getPing(options)
-                } catch (e: IOException) {
+                    pinger.ping()
+                } catch (e: Exception) {
                     if (Thread.interrupted()) return@thread
-                    if (e is UnknownHostException) {
-                        update(n, TextColors.brightRed("$address ${e.javaClass.name}"))
-                    } else {
-                        update(n, null)
-                    }
-                    return@run
-                } catch (e: NullPointerException) {
-                    logError(e)
+                    update(
+                        n,
+                        if (e is IOException) {
+                            if (e is UnknownHostException) Content(address = address, error = e) else null
+                        } else {
+                            logError(e)
+                            Content(address = address, error = e)
+                        }
+                    )
                     return@run
                 }
                 if (Thread.interrupted()) return@thread
+
                 val players = response.players
-                val online = players?.online ?: -1
-                val max = players?.max ?: -1
-                val sample = players?.sample
-                val version = response.version.name
-                val motd = response.description.strippedText.replace(whitespacesRegex, " ")
-                if (sample == null || (online != weirdSpigotNum && (online <= 12 || playersCache.size > online))) {
-                    playersCache.clear()
-                }
-                sample?.map { it.name }?.filter { it.isNotBlank() && it != "Anonymous Player" }?.forEach { name ->
-                    playersCache[name] = 1.0
-                }
-                val str = StringBuilder("$address ($online/$max) [$version] \"$motd\"")
-                if (playersCache.isNotEmpty()) {
-                    str.append("\n └ ${playersCache.map { it.key }.joinToString(", ")}")
-                    val diff = online - playersCache.size
-                    if (diff != 0) {
-                        str.append(' ')
-                        if (diff > 0) {
-                            str.append('+')
-                        }
-                        str.append(diff)
+                val online = players.online ?: 0
+                val max = players.max
+                val sample = players.sample
+                val motd = response.description.let { des ->
+                    if (des != null) {
+                        whitespacesPattern.matcher(PlainTextComponentSerializer.plainText().serialize(des)).replaceAll(" ")
+                    } else {
+                        null
                     }
                 }
-                update(
-                    n,
-                    if (online >= 2) {
-                        if (online >= 25) {
-                            TextColors.brightCyan
-                        } else {
-                            TextColors.brightGreen
-                        }
-                    } else {
-                        TextColors.white
-                    }(str.toString())
-                )
+                val version = response.version.name
 
-                // "00000000-0000-0000-0000-000000000000"
-                val c = if (sample != null) {
-                    sample.size.toDouble() / (if (online == weirdSpigotNum) min(30, max) else online) / 30 // min(n, max)의 n: 상식적으로 가능한 피크 인원
+                val isOnlineNumWeird = (online == weirdSpigotNum)
+                if (sample.isEmpty() || (!isOnlineNumWeird && (online <= 12 || playersCache.size > online))) {
+                    playersCache.clear()
+                }
+                sample.map { it.name }.filter { it.isNotBlank() && it != "Anonymous Player" }.forEach { name ->
+                    playersCache[name] = 1.0
+                }
+
+                val diff = online - playersCache.size
+                val shouldAssumeOnline = (isOnlineNumWeird && diff < 0)
+                val displayedOnline = if (shouldAssumeOnline) online-diff else online
+                update(n, Content(
+                    address = address,
+                    players = Content.Players(
+                        max = max,
+                        online = displayedOnline,
+                        onlineAssumed = shouldAssumeOnline,
+                        list = playersCache.map { it.key }
+                    ),
+                    version = version,
+                    motd = motd
+                ))
+
+                val c = if (sample.isNotEmpty()) {
+                    sample.size.toDouble() / (if (online == weirdSpigotNum) (max ?: 20).coerceIn(weirdSpigotNum..30) else online) / 30
                 } else {
                     0.0
                 }
                 for ((key, value) in playersCache.toMap()) {
-                    if (!usernameRegex.matches(key)) {
+                    if (!usernamePattern.matcher(key).matches()) {
                         playersCache.remove(key)
                         continue
                     }
@@ -152,13 +147,13 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
         }
     } catch (_: InterruptedException) {
     } catch (t: Throwable) {
-        update(n, TextColors.brightRed("$address ${t.javaClass.name}"))
+        update(n, Content(address = address, error = t))
         logError(t)
         return@thread
     }
 }
 
-fun update(n: Int, content: String?) {
+fun update(n: Int, content: Content?) {
     if (content == null) {
         if (print.remove(n) == null) return
     } else if (print.put(n, content) == content) {
@@ -168,3 +163,60 @@ fun update(n: Int, content: String?) {
 }
 
 class PingerException(message: String) : Exception(message)
+
+data class Content(
+    val address: String,
+    val players: Players = Players(),
+    val version: String? = null,
+    val motd: String? = null,
+    val error: Throwable? = null
+) {
+    data class Players(
+        val max: Int? = null,
+        val online: Int? = null,
+        val onlineAssumed: Boolean = false,
+        val list: List<String> = listOf()
+    )
+
+    fun serialize(): String {
+        if (error != null) return TextColors.brightRed("$address ${error.javaClass.name}")
+        val str = StringBuilder("$address (")
+        if (players.online != null && players.max != null) {
+            str.append(players.online)
+            if (players.onlineAssumed) str.append('*')
+            str.append("/${players.max}")
+        } else {
+            str.append("???")
+        }
+        str.append(')')
+        if (version != null) {
+            str.append(" [$version]")
+        }
+        if (motd != null) {
+            str.append(" \"$motd\"")
+        }
+        if (players.list.isNotEmpty()) {
+            str.append("\n └ ${players.list.joinToString(", ")}")
+            if (players.online != null) {
+                val diff = players.online - players.list.size
+                if (diff != 0) {
+                    str.append(' ')
+                    if (diff > 0) {
+                        str.append('+')
+                    }
+                    str.append(diff)
+                }
+            }
+        }
+        return if (players.online != null && players.online >= 2) {
+            if (players.online >= 25) {
+                TextColors.brightCyan
+            } else {
+                TextColors.brightGreen
+            }
+        } else {
+            TextColors.white
+        }(str.toString())
+    }
+}
+

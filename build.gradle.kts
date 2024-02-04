@@ -1,19 +1,25 @@
 plugins {
-    kotlin("jvm") version "1.9.20"
+    val kotlinVersion = "1.9.22"
+    kotlin("jvm") version kotlinVersion
+    kotlin("plugin.serialization") version kotlinVersion
     id("com.github.johnrengelman.shadow") version "8.1.1"
 }
-
-group = "com.github.onlaait"
-version = ""
 
 repositories {
     mavenCentral()
 }
 
 dependencies {
-    implementation(files("libs/mcserverping-1.0.7.jar"))
     implementation("org.apache.logging.log4j:log4j-slf4j-impl:2.21.1")
     implementation("com.github.ajalt.mordant:mordant:2.2.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.2")
+    implementation("com.google.guava:guava:33.0.0-jre")
+
+    val adventureVersion = "4.14.0"
+    implementation("net.kyori:adventure-api:$adventureVersion")
+    implementation("net.kyori:adventure-text-serializer-gson:$adventureVersion")
+    implementation("net.kyori:adventure-text-serializer-legacy:$adventureVersion")
+    implementation("net.kyori:adventure-text-serializer-plain:$adventureVersion")
 }
 
 tasks {
@@ -33,7 +39,6 @@ tasks {
     }
 }
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_17
-    targetCompatibility = JavaVersion.VERSION_17
+kotlin {
+    jvmToolchain(17)
 }
