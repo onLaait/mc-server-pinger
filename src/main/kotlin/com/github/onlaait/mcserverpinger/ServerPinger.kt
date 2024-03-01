@@ -1,5 +1,6 @@
 package com.github.onlaait.mcserverpinger
 
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.*
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.serializer.json.JSONComponentSerializer
@@ -7,6 +8,7 @@ import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer
 import java.io.*
 import java.net.Socket
 import java.net.UnknownHostException
+import java.util.regex.Pattern
 
 class ServerPinger() {
 
@@ -15,7 +17,17 @@ class ServerPinger() {
     }
 
     lateinit var address: ServerAddress
-    var timeout = 5000
+    var timeout = 8000
+
+    @OptIn(ExperimentalSerializationApi::class)
+    private val json =
+        Json {
+            isLenient = true
+            ignoreUnknownKeys = true
+            explicitNulls = false
+            allowTrailingComma = true
+        }
+    private val patInvalid = Pattern.compile("\"[a-zA-Z0-9]*\": *}")
 
     private fun DataInputStream.readVarInt(): Int {
         var i = 0
@@ -66,7 +78,7 @@ class ServerPinger() {
         dataOutputStream.writeByte(0x01) // size is only 1
         dataOutputStream.writeByte(0x00) // packet id for ping
         val dataInputStream = DataInputStream(inputStream)
-        val size = dataInputStream.readVarInt() // size of packet
+        dataInputStream.readVarInt() // size of packet
         var id = dataInputStream.readVarInt() // packet id
         if (id == -1) {
             throw IOException("Premature end of stream.")
@@ -83,7 +95,7 @@ class ServerPinger() {
         }
         val input = ByteArray(length)
         dataInputStream.readFully(input) // read json string
-        val json = String(input)
+        val str = String(input)
         val now = System.currentTimeMillis()
         dataOutputStream.writeByte(0x09) // size of packet
         dataOutputStream.writeByte(0x01) // 0x01 for ping
@@ -104,11 +116,20 @@ class ServerPinger() {
             throw IOException("Invalid packetID")
         }
 
-        val jsonObject = Json.parseToJsonElement(json).jsonObject
+        val filteredStr = patInvalid.matcher(str).replaceAll("}")
+        val jsonObject = json.parseToJsonElement(filteredStr).jsonObject
         val jsonDescription = jsonObject["description"]
         val description = when {
             jsonDescription is JsonObject -> {
-                JSONComponentSerializer.json().deserialize(jsonDescription.jsonObject.toString())
+                if (jsonDescription.keys.size == 1) {
+                    try {
+                        LegacyComponentSerializer.legacySection().deserialize(jsonDescription.jsonObject["text"]!!.jsonPrimitive.content)
+                    } catch (e: NullPointerException) {
+                        null
+                    }
+                } else {
+                    JSONComponentSerializer.json().deserialize(jsonDescription.jsonObject.toString())
+                }
             }
             jsonDescription != null -> {
                 LegacyComponentSerializer.legacySection().deserialize(jsonDescription.jsonPrimitive.content)
@@ -120,14 +141,18 @@ class ServerPinger() {
         val players = jsonObject["players"]?.jsonObject.let { players ->
             val max = players?.get("max")?.jsonPrimitive?.int
             val online = players?.get("online")?.jsonPrimitive?.int
-            val sample = players?.get("sample")?.jsonArray?.map {
+            val sample = mutableListOf<StatusResponse.Players.Player>()
+            players?.get("sample")?.jsonArray?.forEach {
                 it.jsonObject.let { player ->
-                    StatusResponse.Players.Player(
-                        player["id"]!!.jsonPrimitive.content,
-                        player["name"]!!.jsonPrimitive.content
-                    )
+                    try {
+                        sample += StatusResponse.Players.Player(
+                            player["id"]!!.jsonPrimitive.content,
+                            player["name"]!!.jsonPrimitive.content
+                        )
+                    } catch (_: NullPointerException) {
+                    }
                 }
-            } ?: listOf()
+            }
             StatusResponse.Players(max, online, sample)
         }
         val version = jsonObject["version"]?.jsonObject.let { version ->

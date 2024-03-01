@@ -66,7 +66,7 @@ fun main() {
     }
 }
 
-const val weirdSpigotNum = 12 // 일부 Spigot 서버에서 online이 최대 12까지만 표시되는 현상
+const val WEIRD_SPIGOT_NUM = 12 // 일부 Spigot 서버에서 online이 최대 12까지만 표시되는 현상
 val whitespacesPattern: Pattern = Pattern.compile("\\s+")
 val usernamePattern: Pattern = Pattern.compile("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*\$")
 
@@ -106,7 +106,7 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                 }
                 val version = response.version.name
 
-                val isOnlineNumWeird = (online == weirdSpigotNum)
+                val isOnlineNumWeird = (online == WEIRD_SPIGOT_NUM)
                 if (sample.isEmpty() || (!isOnlineNumWeird && online != null && (online <= 12 || playersCache.size > online))) {
                     playersCache.clear()
                 }
@@ -137,7 +137,7 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                 ))
 
                 val c = if (sample.isNotEmpty()) {
-                    sample.size.toDouble() / (if (online == weirdSpigotNum) (max ?: 20).coerceIn(weirdSpigotNum..30) else online ?: sample.size) / 30
+                    sample.size.toDouble() / (if (online == WEIRD_SPIGOT_NUM) (max ?: 20).coerceIn(WEIRD_SPIGOT_NUM..30) else online ?: sample.size) / 30
                 } else {
                     0.0
                 }
