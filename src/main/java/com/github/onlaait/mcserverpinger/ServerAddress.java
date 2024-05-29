@@ -29,7 +29,7 @@ public final class ServerAddress {
 
     public static ServerAddress parse(String address) throws PingerException {
         if (address == null) {
-            throw new PingerException("com.github.onlaait.mcserverpinger.Address is null");
+            throw new PingerException("Address is null");
         }
         try {
             HostAndPort hostAndPort = HostAndPort.fromString(address).withDefaultPort(25565);

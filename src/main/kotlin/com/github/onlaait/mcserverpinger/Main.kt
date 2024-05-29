@@ -30,7 +30,7 @@ fun main() {
             lock.withLock {
                 if (changed) {
                     val str = StringBuilder("\n")
-                    for ((_, content) in print.toSortedMap()) {
+                    for ((_, content) in print) {
                         str.append(content.serialize())
                         str.append("\n")
                     }
@@ -49,7 +49,9 @@ fun main() {
         if (priorModifiedTime != lastModifiedTime) {
             pingers.forEach { it.interrupt() }
             pingers.clear()
-            print.clear()
+            lock.withLock {
+                print.clear()
+            }
             var n = 0
             for (line in filePath.reader().use { it.readLines() }) {
                 if (line.isBlank()) continue
@@ -72,7 +74,7 @@ val usernamePattern: Pattern = Pattern.compile("^(§[\\da-fk-o])*\\w{3,16}(§[\\
 
 fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaemon = true) {
     try {
-        val pinger = ServerPinger(ServerAddress.parse(address))
+        val pinger = ServerPinger(address)
         val playersCache = sortedMapOf<String, Double>()
         while (true) {
             run {
@@ -161,12 +163,14 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
 }
 
 fun update(n: Int, content: Content?) {
-    if (content == null) {
-        if (print.remove(n) == null) return
-    } else if (print.put(n, content) == content) {
-        return
+    lock.withLock {
+        if (content == null) {
+            if (print.remove(n) == null) return
+        } else if (print.put(n, content) == content) {
+            return
+        }
+        changed = true
     }
-    lock.withLock { changed = true }
 }
 
 class PingerException(message: String) : RuntimeException(message)
@@ -218,7 +222,7 @@ data class Content(
         }
         val p = players.online ?: players.list.size
         return if (p >= 2) {
-            if (p >= 25) {
+            if (p >= 30) {
                 TextColors.brightCyan
             } else {
                 TextColors.brightGreen
