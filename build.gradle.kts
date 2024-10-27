@@ -1,8 +1,8 @@
 plugins {
-    val kotlinVersion = "1.9.24"
+    val kotlinVersion = "1.9.25"
     kotlin("jvm") version kotlinVersion
     kotlin("plugin.serialization") version kotlinVersion
-    id("com.github.johnrengelman.shadow") version "8.1.1"
+    id("com.gradleup.shadow") version "8.3.3"
 }
 
 repositories {
@@ -11,9 +11,9 @@ repositories {
 
 dependencies {
     implementation("org.apache.logging.log4j:log4j-slf4j-impl:2.23.1")
-    implementation("com.github.ajalt.mordant:mordant:2.6.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
-    implementation("com.google.guava:guava:33.2.0-jre")
+    implementation("com.github.ajalt.mordant:mordant:2.7.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("com.google.guava:guava:33.2.1-jre")
 
     val adventureVersion = "4.17.0"
     implementation("net.kyori:adventure-api:$adventureVersion")
@@ -23,6 +23,10 @@ dependencies {
 }
 
 tasks {
+    build {
+        dependsOn(shadowJar)
+    }
+
     shadowJar {
         archiveClassifier.set("")
         mergeServiceFiles()
@@ -32,10 +36,6 @@ tasks {
                 "Multi-Release" to true
             )
         }
-    }
-
-    build {
-        dependsOn(shadowJar)
     }
 }
 

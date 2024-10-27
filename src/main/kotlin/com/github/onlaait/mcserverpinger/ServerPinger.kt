@@ -1,6 +1,7 @@
 package com.github.onlaait.mcserverpinger
 
-import com.github.onlaait.mcserverpinger.Log.logger
+import com.github.onlaait.mcserverpinger.address.AllowedAddressResolver
+import com.github.onlaait.mcserverpinger.address.ServerAddress
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.*
 import net.kyori.adventure.text.Component
@@ -10,10 +11,11 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.IOException
+import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.UnknownHostException
 
-class ServerPinger(address: String) {
+class ServerPinger(address: String, var timeout: Int = 8000) {
 
     private companion object {
         @OptIn(ExperimentalSerializationApi::class)
@@ -25,30 +27,109 @@ class ServerPinger(address: String) {
                 allowTrailingComma = true
             }
 
-        val rgxInvalid = Regex("\"[a-zA-Z0-9]*\": *}")
+        val rgxInvalid: Regex = Regex("\"[a-zA-Z0-9]*\": *}")
     }
 
     val address: ServerAddress = ServerAddress.parse(address)
 
-    var timeout = 10000
+    private var cachedInetSocketAddress: InetSocketAddress? = null
 
     fun ping(): StatusResponse {
-        val optional = AllowedAddressResolver.DEFAULT.resolve(address).map(Address::getInetSocketAddress)
-        if (optional.isEmpty) throw UnknownHostException()
-        val inetSocketAddress = optional.get()
+        val addrs =
+            sequence {
+                val cached = cachedInetSocketAddress
+                cached?.let { yield(it) }
+                getInetSocketAddresses().forEach {
+                    if (it != cached) yield(it)
+                }
+            }
 
+        var res: String? = null
+        lateinit var exception: Exception
+        for (addr in addrs) {
+            try {
+                res = getResponse(addr)
+                cachedInetSocketAddress = addr
+                break
+            } catch (e: IOException) {
+                exception = e
+            }
+        }
+        if (res == null) {
+            cachedInetSocketAddress = null
+            throw exception
+        }
+
+        try {
+            val filteredStr = res.replace(rgxInvalid, "}")
+            val jsonObject = json.parseToJsonElement(filteredStr) as? JsonObject
+                ?: return StatusResponse(
+                    description = null,
+                    players = StatusResponse.Players(null, null, emptyList()),
+                    version = StatusResponse.Version(null, null),
+                    favicon = null
+                )
+            val description =
+                jsonObject["description"].let {
+                    when {
+                        it is JsonObject -> {
+                            if (it.size == 1) {
+                                (it["text"] as? JsonPrimitive)?.contentOrNull?.let { text ->
+                                    LegacyComponentSerializer.legacySection().deserialize(text)
+                                }
+                            } else {
+                                JSONComponentSerializer.json().deserialize(it.toString())
+                            }
+                        }
+                        it is JsonPrimitive && it !is JsonNull ->
+                            LegacyComponentSerializer.legacySection().deserialize(it.content)
+                        else -> null
+                    }
+                }
+            val players =
+                (jsonObject["players"] as? JsonObject).let {
+                    val max = (it?.get("max") as? JsonPrimitive)?.intOrNull
+                    val online = (it?.get("online") as? JsonPrimitive)?.intOrNull
+                    val sample = mutableListOf<StatusResponse.Players.Player>()
+                    (it?.get("sample") as? JsonArray)?.forEach { e ->
+                        (e as? JsonObject)?.let { player ->
+                            val id = (player["id"] as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                            val name = (player["name"] as? JsonPrimitive)?.contentOrNull ?: return@forEach
+                            sample += StatusResponse.Players.Player(id, name)
+                        }
+                    }
+                    StatusResponse.Players(max, online, sample)
+                }
+            val version =
+                (jsonObject["version"] as? JsonObject).let {
+                    val name = (it?.get("name") as? JsonPrimitive)?.contentOrNull
+                    val protocol = (it?.get("protocol") as? JsonPrimitive)?.intOrNull
+                    StatusResponse.Version(name, protocol)
+                }
+            val favicon = (jsonObject["favicon"] as? JsonPrimitive)?.contentOrNull
+
+            return StatusResponse(description, players, version, favicon)
+        } catch (e: Exception) {
+            throw RuntimeException("Invalid response: \"$res\"\nCaused by: ${e.stackTraceToString()}")
+        }
+    }
+
+    private fun getInetSocketAddresses(): List<InetSocketAddress> =
+        AllowedAddressResolver.resolve(address) ?: throw UnknownHostException()
+
+    private fun getResponse(address: InetSocketAddress): String {
         val socket = Socket()
         socket.setSoTimeout(timeout)
-        socket.connect(inetSocketAddress, timeout)
+        socket.connect(address, timeout)
 
         val dataOutputStream = DataOutputStream(socket.getOutputStream())
         val b = ByteArrayOutputStream()
         val handshake = DataOutputStream(b)
         handshake.writeByte(0x00) // packet id for handshake
-        handshake.writeVarInt(999) // protocol version
-        handshake.writeVarInt(inetSocketAddress.hostString.length) // host length
-        handshake.writeBytes(inetSocketAddress.hostString) // host string
-        handshake.writeShort(inetSocketAddress.port) // port
+        handshake.writeVarInt(765) // protocol version
+        handshake.writeVarInt(address.hostString.length) // host length
+        handshake.writeBytes(address.hostString) // host string
+        handshake.writeShort(address.port) // port
         handshake.writeVarInt(1) // state (1 for handshake)
         dataOutputStream.writeVarInt(b.size()) // prepend size
         dataOutputStream.write(b.toByteArray()) // write handshake packet
@@ -58,78 +139,18 @@ class ServerPinger(address: String) {
         val dataInputStream = DataInputStream(socket.getInputStream())
         dataInputStream.readVarInt() // size of packet
         val id = dataInputStream.readVarInt() // packet id
-        if (id == -1) {
-            throw IOException("Premature end of stream.")
-        }
-        if (id != 0x00) { // we want a status response
-            throw IOException("Invalid packetID")
-        }
+        if (id == -1) throw IOException("Premature end of stream.")
+        if (id != 0x00) throw IOException("Invalid packetID") // we want a status response
         val length = dataInputStream.readVarInt() // length of json string
-        if (length == -1) {
-            throw IOException("Premature end of stream.")
-        }
-        if (length == 0) {
-            throw IOException("Invalid string length.")
-        }
+        if (length == -1) throw IOException("Premature end of stream.")
+        if (length == 0) throw IOException("Invalid string length.")
 
         val input = ByteArray(length)
         dataInputStream.readFully(input) // read json string
 
         socket.close()
 
-        val str = String(input)
-        try {
-            val filteredStr = str.replace(rgxInvalid, "}")
-            val jsonObject = json.parseToJsonElement(filteredStr).jsonObject
-            val jsonDescription = jsonObject["description"]
-            val description = when {
-                jsonDescription is JsonObject -> {
-                    if (jsonDescription.keys.size == 1) {
-                        try {
-                            LegacyComponentSerializer.legacySection().deserialize(jsonDescription.jsonObject["text"]!!.jsonPrimitive.content)
-                        } catch (e: NullPointerException) {
-                            null
-                        }
-                    } else {
-                        JSONComponentSerializer.json().deserialize(jsonDescription.jsonObject.toString())
-                    }
-                }
-                jsonDescription != null -> {
-                    LegacyComponentSerializer.legacySection().deserialize(jsonDescription.jsonPrimitive.content)
-                }
-                else -> {
-                    null
-                }
-            }
-            val players = jsonObject["players"]?.jsonObject.let { players ->
-                val max = players?.get("max")?.jsonPrimitive?.int
-                val online = players?.get("online")?.jsonPrimitive?.int
-                val sample = mutableListOf<StatusResponse.Players.Player>()
-                players?.get("sample")?.jsonArray?.forEach {
-                    it.jsonObject.let { player ->
-                        try {
-                            sample += StatusResponse.Players.Player(
-                                player["id"]!!.jsonPrimitive.content,
-                                player["name"]!!.jsonPrimitive.content
-                            )
-                        } catch (_: NullPointerException) {
-                        }
-                    }
-                }
-                StatusResponse.Players(max, online, sample)
-            }
-            val version = jsonObject["version"]?.jsonObject.let { version ->
-                val name = version?.get("name")?.jsonPrimitive?.content
-                val protocol = version?.get("protocol")?.jsonPrimitive?.int
-                StatusResponse.Version(name, protocol)
-            }
-            val favicon = jsonObject["favicon"]?.jsonPrimitive?.content
-
-            return StatusResponse(description, players, version, favicon)
-        } catch (e: Exception) {
-            logger.error("Invalid response: $str")
-            throw RuntimeException("Invalid response: \"$str\"\nCaused by: ${e.stackTraceToString()}")
-        }
+        return String(input)
     }
 
     data class StatusResponse(

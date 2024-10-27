@@ -9,7 +9,6 @@ import java.io.IOException
 import java.net.UnknownHostException
 import java.nio.file.attribute.FileTime
 import java.util.concurrent.locks.ReentrantLock
-import java.util.regex.Pattern
 import kotlin.concurrent.thread
 import kotlin.concurrent.withLock
 import kotlin.io.path.*
@@ -69,8 +68,8 @@ fun main() {
 }
 
 const val WEIRD_SPIGOT_NUM = 12 // 일부 Spigot 서버에서 online이 최대 12까지만 표시되는 현상
-val whitespacesPattern: Pattern = Pattern.compile("\\s+")
-val usernamePattern: Pattern = Pattern.compile("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*\$")
+val RGX_WHITESPACES = Regex("\\s+")
+val RGX_USERNAME = Regex("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*$")
 
 fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaemon = true) {
     try {
@@ -101,7 +100,7 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                 val sample = players.sample
                 val motd = response.description.let { des ->
                     if (des != null) {
-                        whitespacesPattern.matcher(PlainTextComponentSerializer.plainText().serialize(des)).replaceAll(" ")
+                        PlainTextComponentSerializer.plainText().serialize(des).replace(RGX_WHITESPACES, " ")
                     } else {
                         null
                     }
@@ -144,7 +143,7 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                     0.0
                 }
                 for ((key, value) in playersCache.toMap()) {
-                    if (!usernamePattern.matcher(key).matches()) {
+                    if (!RGX_USERNAME.matches(key)) {
                         playersCache.remove(key)
                         continue
                     }
