@@ -71,7 +71,7 @@ const val WEIRD_SPIGOT_NUM = 12 // 일부 Spigot 서버에서 online이 최대 1
 val RGX_WHITESPACES = Regex("\\s+")
 val RGX_USERNAME = Regex("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*$")
 
-fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaemon = true) {
+fun pinger(n: Int, address: String): Thread = Thread.ofVirtual().name("Pinger$n($address)").start thread@ {
     try {
         val pinger = ServerPinger(address)
         val playersCache = sortedMapOf<String, Double>()
@@ -151,7 +151,7 @@ fun pinger(n: Int, address: String) = thread(name = "Pinger$n($address)", isDaem
                     if (value <= 0) playersCache.remove(key)
                 }
             }
-            Thread.sleep(2000)
+            Thread.sleep(3000)
         }
     } catch (_: InterruptedException) {
     } catch (t: Throwable) {
@@ -171,8 +171,6 @@ fun update(n: Int, content: Content?) {
         changed = true
     }
 }
-
-class PingerException(message: String) : RuntimeException(message)
 
 data class Content(
     val address: String,
