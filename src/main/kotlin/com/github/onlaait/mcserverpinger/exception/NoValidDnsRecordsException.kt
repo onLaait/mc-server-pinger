@@ -1,4 +1,4 @@
-package com.github.onlaait.mcserverpinger
+package com.github.onlaait.mcserverpinger.exception
 
 import java.io.IOException
 

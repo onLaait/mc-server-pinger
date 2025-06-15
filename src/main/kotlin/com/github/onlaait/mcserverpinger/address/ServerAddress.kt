@@ -1,6 +1,6 @@
 package com.github.onlaait.mcserverpinger.address
 
-import com.github.onlaait.mcserverpinger.PingerException
+import com.github.onlaait.mcserverpinger.exception.PingerException
 import com.google.common.net.HostAndPort
 
 import java.net.IDN

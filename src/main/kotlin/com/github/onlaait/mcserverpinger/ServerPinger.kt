@@ -2,9 +2,10 @@ package com.github.onlaait.mcserverpinger
 
 import com.github.onlaait.mcserverpinger.address.AllowedAddressResolver
 import com.github.onlaait.mcserverpinger.address.ServerAddress
+import com.github.onlaait.mcserverpinger.exception.NoValidDnsRecordsException
+import com.github.onlaait.mcserverpinger.exception.PingerException
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.json.*
-import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.serializer.json.JSONComponentSerializer
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer
 import java.io.ByteArrayOutputStream
@@ -19,28 +20,16 @@ class ServerPinger(address: String, var timeout: Int = 8000) {
 
     private companion object {
 
-        const val PROTOCOL_VERSION = 768
+        const val PROTOCOL_VERSION = 769
 
         val INVALID_IPS = arrayOf("127.0.0.1", "0.0.0.0")
 
         @OptIn(ExperimentalSerializationApi::class)
-        val json =
+        val JSON =
             Json {
                 isLenient = true
-                ignoreUnknownKeys = true
-                explicitNulls = false
                 allowTrailingComma = true
             }
-
-        val rgxInvalid: Regex = Regex("\"[a-zA-Z0-9]*\": *}")
-
-        val EMPTY_RESPONSE =
-            StatusResponse(
-                description = null,
-                players = StatusResponse.Players(null, null, emptyList()),
-                version = StatusResponse.Version(null, null),
-                favicon = null
-            )
     }
 
     val address: ServerAddress = ServerAddress.parse(address)
@@ -78,10 +67,9 @@ class ServerPinger(address: String, var timeout: Int = 8000) {
             throw exception ?: NoValidDnsRecordsException()
         }
 
-        if (res == null) return EMPTY_RESPONSE
+        if (res == null) return StatusResponse.EMPTY
         try {
-            val filteredStr = res.replace(rgxInvalid, "}")
-            val jsonObject = json.parseToJsonElement(filteredStr) as? JsonObject ?: return EMPTY_RESPONSE
+            val jsonObject = JSON.parseToJsonElement(res) as? JsonObject ?: return StatusResponse.EMPTY
             val description =
                 jsonObject["description"].let {
                     when {
@@ -168,31 +156,6 @@ class ServerPinger(address: String, var timeout: Int = 8000) {
         } finally {
             socket.close()
         }
-    }
-
-    data class StatusResponse(
-        val description: Component?,
-        val players: Players,
-        val version: Version,
-        val favicon: String?
-    ) {
-
-        data class Players(
-            val max: Int?,
-            val online: Int?,
-            val sample: List<Player>
-        ) {
-
-            data class Player(
-                val id: String,
-                val name: String
-            )
-        }
-
-        data class Version(
-            val name: String?,
-            val protocol: Int?
-        )
     }
 
     private fun DataInputStream.readVarInt(): Int {

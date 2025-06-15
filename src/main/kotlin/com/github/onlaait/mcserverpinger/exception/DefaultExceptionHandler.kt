@@ -1,5 +1,6 @@
-package com.github.onlaait.mcserverpinger
+package com.github.onlaait.mcserverpinger.exception
 
+import com.github.onlaait.mcserverpinger.Log
 import kotlin.system.exitProcess
 
 object DefaultExceptionHandler : Thread.UncaughtExceptionHandler {

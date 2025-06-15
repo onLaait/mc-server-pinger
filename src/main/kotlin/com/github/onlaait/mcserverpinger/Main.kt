@@ -4,6 +4,7 @@ import com.github.ajalt.mordant.rendering.AnsiLevel
 import com.github.ajalt.mordant.rendering.TextColors
 import com.github.ajalt.mordant.terminal.Terminal
 import com.github.onlaait.mcserverpinger.Log.logError
+import com.github.onlaait.mcserverpinger.exception.DefaultExceptionHandler
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
 import java.io.IOException
 import java.net.UnknownHostException
@@ -12,39 +13,47 @@ import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
 import kotlin.concurrent.withLock
 import kotlin.io.path.*
+import kotlin.reflect.KClass
 
-val print = sortedMapOf<Int, Content>()
-var changed = true
-val lock = ReentrantLock()
+private const val CONSOLE_COOLDOWN: Long = 500
+private const val PING_COOLDOWN: Long = 8765
+
+private val print = sortedMapOf<Int, PingResult>()
+private var changed = true
+private val lock = ReentrantLock()
 
 fun main() {
     Thread.setDefaultUncaughtExceptionHandler(DefaultExceptionHandler)
-    val filePath = Path("servers.txt")
-    val pingers = mutableListOf<Thread>()
-    val terminal = Terminal(AnsiLevel.TRUECOLOR)
-    terminal.cursor.hide()
-    if (!filePath.exists() || filePath.isDirectory()) filePath.createFile()
+
     thread(name = "Printer", isDaemon = true) {
+        val terminal = Terminal(AnsiLevel.TRUECOLOR)
+        terminal.cursor.hide()
         while (true) {
             lock.withLock {
                 if (changed) {
-                    val str = StringBuilder("\n")
-                    for ((_, content) in print) {
-                        str.append(content.serialize())
-                        str.append("\n")
-                    }
+                    val str =
+                        buildString {
+                            appendLine()
+                            for ((_, content) in print) {
+                                appendLine(content.encodeToString())
+                            }
+                        }
                     TerminalUtil.clearTerminal()
-                    terminal.println(str.toString())
+                    terminal.println(str)
                     terminal.cursor.hide()
                     changed = false
                 }
             }
-            Thread.sleep(500)
+            Thread.sleep(CONSOLE_COOLDOWN)
         }
     }
-    var priorModifiedTime = FileTime.fromMillis(0)
+
+    val path = Path("servers.txt")
+    if (!path.exists()) path.createFile()
+    val pingers = mutableListOf<Thread>()
+    var priorModifiedTime: FileTime? = null
     while (true) {
-        val lastModifiedTime = filePath.getLastModifiedTime()
+        val lastModifiedTime = path.getLastModifiedTime()
         if (priorModifiedTime != lastModifiedTime) {
             pingers.forEach { it.interrupt() }
             pingers.clear()
@@ -52,13 +61,13 @@ fun main() {
                 print.clear()
             }
             var n = 0
-            for (line in filePath.reader().use { it.readLines() }) {
+            for (line in path.readLines()) {
                 if (line.isBlank()) continue
                 pingers += pinger(n, line.trim())
                 n++
             }
             if (n == 0) {
-                println("${filePath.name} is empty")
+                println("${path.name} is empty")
                 return
             }
             priorModifiedTime = lastModifiedTime
@@ -67,48 +76,49 @@ fun main() {
     }
 }
 
-const val WEIRD_SPIGOT_NUM = 12 // 일부 Spigot 서버에서 online이 최대 12까지만 표시되는 현상
-val RGX_WHITESPACES = Regex("\\s+")
-val RGX_USERNAME = Regex("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*$")
+private const val WEIRD_SPIGOT_NUM = 12 // 일부 Spigot 서버에서 online이 최대 12까지만 표시되는 현상
+private val RGX_WHITESPACES = Regex("\\s+")
+private val RGX_USERNAME = Regex("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*$")
 
-fun pinger(n: Int, address: String): Thread = Thread.ofVirtual().name("Pinger$n($address)").start thread@ {
+private fun pinger(n: Int, address: String): Thread = Thread.ofVirtual().name("Pinger$n($address)").start thread@ {
     try {
         val pinger = ServerPinger(address)
         val playersCache = sortedMapOf<String, Double>()
         while (true) {
             run {
-                val response = try {
-                    pinger.ping()
-                } catch (e: Exception) {
-                    if (Thread.interrupted()) return@thread
-                    update(
-                        n,
-                        if (e is IOException) {
-                            if (e is UnknownHostException) Content(address = address, error = e.javaClass) else null
-                        } else {
-                            logError(e)
-                            Content(address = address, error = e.javaClass)
-                        }
-                    )
-                    return@run
-                }
+                val response =
+                    try {
+                        pinger.ping()
+                    } catch (e: Exception) {
+                        if (Thread.interrupted()) return@thread
+                        update(
+                            n,
+                            if (e is IOException) {
+                                if (e is UnknownHostException) PingResult(address = address, error = e::class) else null
+                            } else {
+                                logError(e)
+                                PingResult(address = address, error = e::class)
+                            }
+                        )
+                        return@run
+                    }
                 if (Thread.interrupted()) return@thread
 
                 val players = response.players
                 val online = players.online
                 val max = players.max
                 val sample = players.sample
-                val motd = response.description.let { des ->
-                    if (des != null) {
-                        PlainTextComponentSerializer.plainText().serialize(des).replace(RGX_WHITESPACES, " ")
+                val motd = response.description.let {
+                    if (it != null) {
+                        PlainTextComponentSerializer.plainText().serialize(it).replace(RGX_WHITESPACES, " ")
                     } else {
                         null
                     }
                 }
                 val version = response.version.name
+                val isOnlineWeird = online == WEIRD_SPIGOT_NUM
 
-                val isOnlineNumWeird = (online == WEIRD_SPIGOT_NUM)
-                if (sample.isEmpty() || (!isOnlineNumWeird && online != null && (online <= 12 || playersCache.size > online))) {
+                if (sample.isEmpty() || (!isOnlineWeird && online != null && (online <= 12 || playersCache.size > online))) {
                     playersCache.clear()
                 }
                 sample.map { it.name }.filter { it.isNotBlank() && it != "Anonymous Player" }.forEach { name ->
@@ -119,15 +129,15 @@ fun pinger(n: Int, address: String): Thread = Thread.ofVirtual().name("Pinger$n(
                 val displayedOnline: Int?
                 if (online != null) {
                     val diff = online - playersCache.size
-                    shouldAssumeOnline = (isOnlineNumWeird && diff < 0)
+                    shouldAssumeOnline = (isOnlineWeird && diff < 0)
                     displayedOnline = if (shouldAssumeOnline) online - diff else online
                 } else {
                     shouldAssumeOnline = false
                     displayedOnline = null
                 }
-                update(n, Content(
+                update(n, PingResult(
                     address = address,
-                    players = Content.Players(
+                    players = PingResult.Players(
                         max = max,
                         online = displayedOnline,
                         onlineAssumed = shouldAssumeOnline,
@@ -137,31 +147,32 @@ fun pinger(n: Int, address: String): Thread = Thread.ofVirtual().name("Pinger$n(
                     motd = motd
                 ))
 
-                val c = if (sample.isNotEmpty()) {
-                    sample.size.toDouble() / (if (online == WEIRD_SPIGOT_NUM) (max ?: 20).coerceIn(WEIRD_SPIGOT_NUM..30) else online ?: sample.size) / 30
-                } else {
-                    0.0
-                }
+                val c =
+                    if (sample.isNotEmpty()) {
+                        sample.size.toDouble() / (if (online == WEIRD_SPIGOT_NUM) (max ?: 20).coerceIn(WEIRD_SPIGOT_NUM..30) else online ?: sample.size) / 30
+                    } else {
+                        0.0
+                    }
                 for ((key, value) in playersCache.toMap()) {
                     if (!RGX_USERNAME.matches(key)) {
-                        playersCache.remove(key)
+                        playersCache -= key
                         continue
                     }
                     playersCache[key] = value - c
-                    if (value <= 0) playersCache.remove(key)
+                    if (value <= 0) playersCache -= key
                 }
             }
-            Thread.sleep(3000)
+            Thread.sleep(PING_COOLDOWN)
         }
     } catch (_: InterruptedException) {
     } catch (t: Throwable) {
-        update(n, Content(address = address, error = t.javaClass))
+        update(n, PingResult(address = address, error = t::class))
         logError(t)
         return@thread
     }
 }
 
-fun update(n: Int, content: Content?) {
+private fun update(n: Int, content: PingResult?) {
     lock.withLock {
         if (content == null) {
             if (print.remove(n) == null) return
@@ -172,61 +183,66 @@ fun update(n: Int, content: Content?) {
     }
 }
 
-data class Content(
+private data class PingResult(
     val address: String,
-    val players: Players = Players(),
+    val players: Players = Players.EMPTY,
     val version: String? = null,
     val motd: String? = null,
-    val error: Class<Throwable>? = null
+    val error: KClass<out Throwable>? = null
 ) {
 
     data class Players(
         val max: Int? = null,
         val online: Int? = null,
         val onlineAssumed: Boolean = false,
-        val list: List<String> = listOf()
-    )
+        val list: List<String> = emptyList()
+    ) {
+        companion object {
+            val EMPTY = Players()
+        }
+    }
 
-    fun serialize(): String {
-        if (error != null) return TextColors.brightRed("$address ${error.name}")
-        val str = StringBuilder("$address (")
-        if (players.online != null && players.max != null) {
-            str.append(players.online)
-            if (players.onlineAssumed) str.append('*')
-            str.append("/${players.max}")
-        } else {
-            str.append("???")
-        }
-        str.append(')')
-        if (version != null) {
-            str.append(" [$version]")
-        }
-        if (motd != null) {
-            str.append(" \"$motd\"")
-        }
-        if (players.list.isNotEmpty()) {
-            str.append("\n └ ${players.list.joinToString(", ")}")
-            if (players.online != null) {
-                val diff = players.online - players.list.size
-                if (diff != 0) {
-                    str.append(' ')
-                    if (diff > 0) {
-                        str.append('+')
+    fun encodeToString(): String {
+        if (error != null) return TextColors.brightRed("$address ${error.qualifiedName}")
+
+        val str = buildString {
+            append("$address (")
+            if (players.online != null && players.max != null) {
+                append(players.online)
+                if (players.onlineAssumed) append('*')
+                append("/${players.max}")
+            } else {
+                append("???")
+            }
+            append(')')
+            if (version != null) append(" [$version]")
+            if (motd != null) append(" \"$motd\"")
+            if (players.list.isNotEmpty()) {
+                append("\n └ ${players.list.joinToString(", ")}")
+                if (players.online != null) {
+                    val diff = players.online - players.list.size
+                    if (diff != 0) {
+                        append(' ')
+                        if (diff > 0) append('+')
+                        append(diff)
                     }
-                    str.append(diff)
                 }
             }
         }
-        val p = players.online ?: players.list.size
-        return if (p >= 2) {
-            if (p >= 30) {
-                TextColors.brightCyan
+
+        val online = players.online ?: players.list.size
+        val color =
+            if (online >= 2) {
+                if (online >= 30) {
+                    TextColors.brightCyan
+                } else {
+                    TextColors.brightGreen
+                }
             } else {
-                TextColors.brightGreen
+                TextColors.white
             }
-        } else {
-            TextColors.white
-        }(str.toString())
+
+        return color(str)
     }
 }
 
