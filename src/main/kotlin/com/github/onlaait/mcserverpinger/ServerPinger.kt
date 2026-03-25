@@ -20,7 +20,7 @@ class ServerPinger(address: String, var timeout: Int = 8000) {
 
     private companion object {
 
-        const val PROTOCOL_VERSION = 769
+        const val PROTOCOL_VERSION = 774
 
         val INVALID_IPS = arrayOf("127.0.0.1", "0.0.0.0")
 
@@ -82,8 +82,10 @@ class ServerPinger(address: String, var timeout: Int = 8000) {
                                 JSONComponentSerializer.json().deserialize(it.toString())
                             }
                         }
+
                         it is JsonPrimitive && it !is JsonNull ->
                             LegacyComponentSerializer.legacySection().deserialize(it.content)
+
                         else -> null
                     }
                 }

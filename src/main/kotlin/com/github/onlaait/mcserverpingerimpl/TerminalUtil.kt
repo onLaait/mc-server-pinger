@@ -1,6 +1,7 @@
-package com.github.onlaait.mcserverpinger
+package com.github.onlaait.mcserverpingerimpl
 
 object TerminalUtil {
+
     private val clearTerminalTask =
         if (System.getProperty("os.name").contains("Windows")) {
             {

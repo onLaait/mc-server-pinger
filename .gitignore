@@ -1,6 +1,7 @@
-.gradle
-build/
+/.gradle/
 /.idea/
+/build/
+/out/
+/src/test/
 /servers.txt
 /log.log
-/src/test/
