@@ -37,7 +37,7 @@ private fun terminal() {
                     }
                 }
             TerminalUtil.clearTerminal()
-            terminal.println(str)
+            terminal.print(str)
             terminal.cursor.hide()
             priorResults = results
         }

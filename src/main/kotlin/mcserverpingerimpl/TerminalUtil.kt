@@ -9,8 +9,7 @@ object TerminalUtil {
             }
         } else {
             {
-                Runtime.getRuntime().exec("clear")
-                print("\\033[H\\033[2J")
+                print("\u001b[H\u001b[2J")
                 System.out.flush()
             }
         }

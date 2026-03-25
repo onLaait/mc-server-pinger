@@ -15,7 +15,6 @@ class Server(val address: String) {
     private companion object {
         const val PING_COOLDOWN: Long = 8765
 
-        const val SAMPLE_MAX_SIZE = 12
         val VALID_ONLINE_RANGE = 1..5000
         const val MODERATE_ONLINE = 50
         val USERNAME_RGX = Regex("^(§[\\da-fk-o])*\\w{3,16}(§[\\da-fk-o])*$")
